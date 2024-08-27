@@ -195,6 +195,7 @@ bool starknet_derive_bip32_node(const uint8_t *seed, uint8_t *private_key) {
   return true;
 }
 
+#include <time.h>
 bool starknet_derive_key_from_seed(const uint8_t *seed_key,
                                    const uint32_t *path,
                                    uint32_t path_length,
@@ -222,9 +223,19 @@ bool starknet_derive_key_from_seed(const uint8_t *seed_key,
   stark_point p;
   stark_point_init(&p);
   // uint8_t stark_public_key[32];
+
+  struct timespec start, end;
+  double time_taken;
+
+  // Start time measurement
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
   if (!grind_key(starkChildNode.private_key, stark_private_key)) {
     return false;
   }
+
+  // End time measurement
+  clock_gettime(CLOCK_MONOTONIC, &end);
   
   printf("starkPrivateKey: ");
   for (size_t i = 0; i < 32; i++) {
@@ -256,6 +267,11 @@ bool starknet_derive_key_from_seed(const uint8_t *seed_key,
 
   memzero(key, 33);
   memcpy(key, stark_private_key, 32);
+
+  // Calculate the elapsed time in seconds
+  time_taken = (end.tv_sec - start.tv_sec) + 
+               (end.tv_nsec - start.tv_nsec) / 1e9;
+  printf("\nTime taken by grind_key: %f seconds\n\n", time_taken);
 
   return true;
 }
