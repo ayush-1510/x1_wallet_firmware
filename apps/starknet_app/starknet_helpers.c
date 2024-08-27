@@ -87,7 +87,7 @@
 /**
  * @brief Grind starknet private from provided 32-byte seed
  */
-static bool grind_key(const uint8_t *grind_seed, uint8_t *out);
+// bool grind_key(const uint8_t *grind_seed, uint8_t *out);
 
 /*****************************************************************************
  * STATIC VARIABLES
@@ -101,7 +101,7 @@ static bool grind_key(const uint8_t *grind_seed, uint8_t *out);
  * STATIC FUNCTIONS
  *****************************************************************************/
 
-static bool get_stark_child_node(const uint32_t *path,
+bool get_stark_child_node(const uint32_t *path,
                                  const size_t path_length,
                                  const char *curve,
                                  const uint8_t *seed,
@@ -121,40 +121,82 @@ static bool get_stark_child_node(const uint32_t *path,
 #include "mini-gmp.h"
 #include "mini-gmp-helpers.h"
 // mini-GMP
-bool grind_key(const uint8_t *grind_seed, uint8_t *out) {
-    uint8_t key[32] = {0};
-    mpz_t strk_limit;
-    mpz_t strk_key;
-    mpz_t stark_order;
+// bool grind_key(const uint8_t *grind_seed, uint8_t *out) {
+//     uint8_t key[32] = {0};
+//     mpz_t strk_limit;
+//     mpz_t strk_key;
+//     mpz_t stark_order;
 
-    // Initialize stark_order
-    mpz_init_set_str(stark_order, "0800000000000010FFFFFFFFFFFFFFFFB781126DCAE7B2321E66A241ADC64D2F", 16);
+//     // Initialize stark_order
+//     mpz_init_set_str(stark_order, "0800000000000010FFFFFFFFFFFFFFFFB781126DCAE7B2321E66A241ADC64D2F", 16);
 
-    // Initialize strk_limit
-    mpz_init_set_str(strk_limit, "F80000000000020EFFFFFFFFFFFFFFF738A13B4B920E9411AE6DA5F40B0358B1", 16);
+//     // Initialize strk_limit
+//     mpz_init_set_str(strk_limit, "F80000000000020EFFFFFFFFFFFFFFF738A13B4B920E9411AE6DA5F40B0358B1", 16);
 
-    SHA256_CTX ctx = {0};
-    mpz_init(strk_key);
-    for (uint8_t itr = 0; itr < 200; itr++) {
-        sha256_Init(&ctx);
-        sha256_Update(&ctx, grind_seed, 32);
-        sha256_Update(&ctx, &itr, 1);
-        sha256_Final(&ctx, key);
+//     SHA256_CTX ctx = {0};
+//     mpz_init(strk_key);
+//     for (uint8_t itr = 0; itr < 200; itr++) {
+//         sha256_Init(&ctx);
+//         sha256_Update(&ctx, grind_seed, 32);
+//         sha256_Update(&ctx, &itr, 1);
+//         sha256_Final(&ctx, key);
 
-        byte_array_to_mpz(strk_key, key, 32);
-        if (mpz_cmp(strk_key, strk_limit) == -1) {
-            mpz_t f_key;
-            mpz_init(f_key);
-            mpz_mod(f_key, strk_key, stark_order);
-            mpz_to_byte_array(f_key, out, 32);
-            return true;
-        }
-    }
+//         byte_array_to_mpz(strk_key, key, 32);
+//         if (mpz_cmp(strk_key, strk_limit) == -1) {
+//             mpz_t f_key;
+//             mpz_init(f_key);
+//             mpz_mod(f_key, strk_key, stark_order);
+//             mpz_to_byte_array(f_key, out, 32);
+//             return true;
+//         }
+//     }
     
-    starknet_send_error(ERROR_COMMON_ERROR_UNKNOWN_ERROR_TAG, 0);
-    printf("ERROR: grind 200 iterations failed\n");
-    LOG_CRITICAL("grind 200 failed");
-    return false;
+//     starknet_send_error(ERROR_COMMON_ERROR_UNKNOWN_ERROR_TAG, 0);
+//     printf("ERROR: grind 200 iterations failed\n");
+//     LOG_CRITICAL("grind 200 failed");
+//     return false;
+// }
+
+// tiny-bignum
+bool grind_key(const uint8_t *grind_seed, uint8_t *out) {
+  uint8_t key[32] = {0};
+  struct bn a;
+  struct bn strk_limit;
+  struct bn strk_key;
+  struct bn stark_order;
+  char str[65] = "";
+
+  bignum_from_string(
+      &stark_order,
+      "0800000000000010FFFFFFFFFFFFFFFFB781126DCAE7B2321E66A241ADC64D2F",
+      64);
+  bignum_from_string(
+      &strk_limit,
+      "F80000000000020EFFFFFFFFFFFFFFF738A13B4B920E9411AE6DA5F40B0358B1",
+      64);
+
+  SHA256_CTX ctx = {0};
+  for (uint8_t itr = 0; itr < 200; itr++) {
+    sha256_Init(&ctx);
+    sha256_Update(&ctx, grind_seed, 32);
+
+    // copy iteration
+    sha256_Update(&ctx, &itr, 1);
+    sha256_Final(&ctx, key);
+
+    byte_array_to_hex_string(key, 32, str, 65);
+    bignum_from_string(&strk_key, str, 64);
+    if (bignum_cmp(&strk_key, &strk_limit) == SMALLER) {
+      struct bn f_key = {0};
+      bignum_mod(&strk_key, &stark_order, &f_key);
+      bignum_to_string(&f_key, str, 64);
+      hex_string_to_byte_array(str, 64, out);
+      return true;
+    }
+  }
+  starknet_send_error(ERROR_COMMON_ERROR_UNKNOWN_ERROR_TAG, 0);
+  LOG_CRITICAL("grind 200 failed");
+  return false;
 }
 
 /*****************************************************************************
@@ -195,6 +237,7 @@ bool starknet_derive_bip32_node(const uint8_t *seed, uint8_t *private_key) {
   return true;
 }
 
+#include <time.h>
 bool starknet_derive_key_from_seed(const uint8_t *seed_key,
                                    const uint32_t *path,
                                    uint32_t path_length,
@@ -222,9 +265,19 @@ bool starknet_derive_key_from_seed(const uint8_t *seed_key,
   stark_point p;
   stark_point_init(&p);
   // uint8_t stark_public_key[32];
+
+  struct timespec start, end;
+  double time_taken;
+
+  // Start time measurement
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
   if (!grind_key(starkChildNode.private_key, stark_private_key)) {
     return false;
   }
+
+  // End time measurement
+  clock_gettime(CLOCK_MONOTONIC, &end);
   
   printf("starkPrivateKey: ");
   for (size_t i = 0; i < 32; i++) {
@@ -256,6 +309,11 @@ bool starknet_derive_key_from_seed(const uint8_t *seed_key,
 
   memzero(key, 33);
   memcpy(key, stark_private_key, 32);
+
+  // Calculate the elapsed time in seconds
+  time_taken = (end.tv_sec - start.tv_sec) + 
+               (end.tv_nsec - start.tv_nsec) / 1e9;
+  printf("\nTime taken by grind_key: %f seconds\n\n", time_taken);
 
   return true;
 }
