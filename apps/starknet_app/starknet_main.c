@@ -1,9 +1,7 @@
 /**
- * @file    near_txn_user_verification.c
+ * @file    starknet_main.c
  * @author  Cypherock X1 Team
- * @brief   Source file to handle user confirmation flow during txn signing for
- *          NEAR protocol
- *
+ * @brief   A common entry point to various Starknet actions supported.
  * @copyright Copyright (c) 2023 HODL TECH PTE LTD
  * <br/> You may obtain a copy of license at <a href="https://mitcc.org/"
  *target=_blank>https://mitcc.org/</a>
@@ -62,14 +60,11 @@
  * INCLUDES
  *****************************************************************************/
 
-#include <stdint.h>
+#include "starknet_main.h"
 
-#include "constant_texts.h"
-#include "near_api.h"
-#include "near_context.h"
-#include "near_helpers.h"
-#include "near_priv.h"
-#include "ui_core_confirm.h"
+#include "starknet_api.h"
+#include "starknet_priv.h"
+#include "status_api.h"
 
 /*****************************************************************************
  * EXTERN VARIABLES
@@ -84,80 +79,72 @@
  *****************************************************************************/
 
 /*****************************************************************************
- * STATIC FUNCTION PROTOTYPES
- *****************************************************************************/
-
-/*****************************************************************************
- * STATIC VARIABLES
- *****************************************************************************/
-
-/*****************************************************************************
  * GLOBAL VARIABLES
  *****************************************************************************/
 
 /*****************************************************************************
+ * STATIC FUNCTION PROTOTYPES
+ *****************************************************************************/
+/**
+ * @brief Entry point for the STARKNET application of the X1 vault. It is
+ * invoked by the X1 vault firmware, as soon as there is a USB request raised
+ * for the Solana app.
+ *
+ * @param usb_evt The USB event which triggered invocation of the bitcoin app
+ */
+void starknet_main(usb_event_t usb_evt, const void *app_config);
+
+/*****************************************************************************
+ * STATIC VARIABLES
+ *****************************************************************************/
+static const cy_app_desc_t starknet_app_desc = {.id = 20,
+                                                .version =
+                                                    {
+                                                        .major = 1,
+                                                        .minor = 0,
+                                                        .patch = 0,
+                                                    },
+                                                .app = starknet_main,
+                                                .app_config = NULL};
+
+/*****************************************************************************
  * STATIC FUNCTIONS
  *****************************************************************************/
+void starknet_main(usb_event_t usb_evt, const void *app_config) {
+  starknet_query_t query = STARKNET_QUERY_INIT_DEFAULT;
+
+  if (false == decode_starknet_query(usb_evt.p_msg, usb_evt.msg_size, &query)) {
+    return;
+  }
+
+  /* Set status to CORE_DEVICE_IDLE_STATE_USB to indicate host that we are now
+   * servicing a USB initiated command */
+  core_status_set_idle_state(CORE_DEVICE_IDLE_STATE_USB);
+
+  switch ((uint8_t)query.which_request) {
+    case STARKNET_QUERY_GET_PUBLIC_KEYS_TAG:
+    case STARKNET_QUERY_GET_USER_VERIFIED_PUBLIC_KEY_TAG: {
+      starknet_get_pub_keys(&query);
+      break;
+    }
+    case STARKNET_QUERY_SIGN_TXN_TAG: {
+      starknet_sign_transaction(&query);
+      break;
+    }
+
+    default: {
+      /* In case we ever encounter invalid query, convey to the host app */
+      starknet_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
+                          ERROR_DATA_FLOW_INVALID_QUERY);
+    } break;
+  }
+
+  return;
+}
 
 /*****************************************************************************
  * GLOBAL FUNCTIONS
  *****************************************************************************/
-bool user_verification_transfer(const near_unsigned_txn *decoded_utxn) {
-  char transaction[100] = "";
-  char address[200] = "";
-  char value[100] = "";
-
-  snprintf(transaction,
-           sizeof(transaction),
-           UI_TEXT_REVIEW_TXN_PROMPT,
-           ui_text_near_transfer_action_type);
-
-  snprintf(address,
-           CY_MIN(decoded_utxn->receiver_id_length + 1, sizeof(address)),
-           "%s",
-           decoded_utxn->receiver);
-
-  get_amount_string(decoded_utxn->action.transfer.amount, value, sizeof(value));
-
-  if (!core_scroll_page(NULL, transaction, near_send_error) ||
-      !core_scroll_page(ui_text_verify_address, address, near_send_error) ||
-      !core_confirmation(value, near_send_error)) {
-    return false;
-  }
-
-  return true;
-}
-
-bool user_verification_function(const near_unsigned_txn *decoded_utxn) {
-  char transaction[100] = "";
-  char address[200] = "";
-  char account[200] = "";
-  char value[100] = "";
-
-  snprintf(transaction,
-           sizeof(transaction),
-           UI_TEXT_REVIEW_TXN_PROMPT,
-           ui_text_near_create_account_method);
-
-  snprintf(address,
-           CY_MIN(decoded_utxn->signer_id_length, sizeof(address)),
-           "%s",
-           decoded_utxn->signer);
-
-  near_get_new_account_id_from_fn_args(
-      (const char *)decoded_utxn->action.fn_call.args,
-      decoded_utxn->action.fn_call.args_length,
-      account);
-
-  get_amount_string(decoded_utxn->action.fn_call.deposit, value, sizeof(value));
-
-  if (!core_scroll_page(NULL, transaction, near_send_error) ||
-      !core_scroll_page(ui_text_verify_create_from, address, near_send_error) ||
-      !core_scroll_page(
-          ui_text_verify_new_account_id, account, near_send_error) ||
-      !core_confirmation(value, near_send_error)) {
-    return false;
-  }
-
-  return true;
+const cy_app_desc_t *get_starknet_app_desc() {
+  return &starknet_app_desc;
 }

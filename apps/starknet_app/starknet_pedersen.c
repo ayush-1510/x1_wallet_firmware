@@ -1,7 +1,7 @@
 /**
- * @file    near_api.c
+ * @file    starknet_padersen.c
  * @author  Cypherock X1 Team
- * @brief   Defines helpers apis for Near app.
+ * @brief   Utilities specific to Starknet chains
  * @copyright Copyright (c) 2023 HODL TECH PTE LTD
  * <br/> You may obtain a copy of license at <a href="https://mitcc.org/"
  *target=_blank>https://mitcc.org/</a>
@@ -60,15 +60,19 @@
  * INCLUDES
  *****************************************************************************/
 
-#include "near_api.h"
+#include <error.pb.h>
 
-#include <pb_decode.h>
-#include <pb_encode.h>
+#include "coin_utils.h"
+#include "starknet_api.h"
+#include "starknet_context.h"
+#include "starknet_crypto.h"
+#include "starknet_helpers.h"
+#include "mini-gmp-helpers.h"
 
-#include "common_error.h"
-#include "core_api.h"
-#include "events.h"
-
+void process_single_element(mpz_t element,
+                            stark_point *p1,
+                            stark_point *p2,
+                            stark_point *result);
 /*****************************************************************************
  * EXTERN VARIABLES
  *****************************************************************************/
@@ -82,6 +86,10 @@
  *****************************************************************************/
 
 /*****************************************************************************
+ * STATIC FUNCTION PROTOTYPES
+ *****************************************************************************/
+
+/*****************************************************************************
  * STATIC VARIABLES
  *****************************************************************************/
 
@@ -90,108 +98,95 @@
  *****************************************************************************/
 
 /*****************************************************************************
- * STATIC FUNCTION PROTOTYPES
- *****************************************************************************/
-
-/*****************************************************************************
  * STATIC FUNCTIONS
  *****************************************************************************/
 
-/*****************************************************************************
- * GLOBAL FUNCTIONS
- *****************************************************************************/
-bool decode_near_query(const uint8_t *data,
-                       uint16_t data_size,
-                       near_query_t *query_out) {
-  if (NULL == data || NULL == query_out || 0 == data_size) {
-    near_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
-                    ERROR_DATA_FLOW_DECODING_FAILED);
-    return false;
-  }
+// void mpz_to_byte_array(mpz_t num, uint8_t *out, size_t out_size) {
+//     size_t countp;
 
-  // zeroise for safety from garbage in the query reference
-  memzero(query_out, sizeof(near_query_t));
+//     // Export the mpz_t value to the byte array
+//     mpz_export(out, &countp, 1, 1, 1, 0, num);
 
-  /* Create a stream that reads from the buffer. */
-  pb_istream_t stream = pb_istream_from_buffer(data, data_size);
+//     // Ensure that the output is padded with leading zeros if necessary
+//     // If the exported size is smaller than the desired output size, fill in leading zeros
+//     if (countp < out_size) {
+//         size_t diff = out_size - countp;
+//         memmove(out + diff, out, countp);
+//         memset(out, 0, diff);
+//     }
+// }
 
-  /* Now we are ready to decode the message. */
-  bool status = pb_decode(&stream, NEAR_QUERY_FIELDS, query_out);
+bool pederson_hash(uint8_t *x, uint8_t *y, uint8_t size, uint8_t *hash) {
+  ASSERT(NULL != x);
+  ASSERT(NULL != y);
+  ASSERT(0 < size);
 
-  /* Send error to host if status is false*/
-  if (false == status) {
-    near_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
-                    ERROR_DATA_FLOW_DECODING_FAILED);
-  }
+  // Convert to bn
+  // char hex[100] = {0};
+  mpz_t a, b, result;
+  mpz_init(a);
+  mpz_init(b);
+  mpz_init(result);
 
-  return status;
-}
+  // byte_array_to_hex_string(x, size, hex, size * 2 + 1);
+  // bignum_from_string(&a, hex, size);
+  // byte_array_to_hex_string(x, size, hex, size * 2 + 1);
+  // bignum_from_string(&b, hex, size);
 
-bool encode_near_result(const near_result_t *result,
-                        uint8_t *buffer,
-                        uint16_t max_buffer_len,
-                        size_t *bytes_written_out) {
-  if (NULL == result || NULL == buffer || NULL == bytes_written_out)
-    return false;
+  mpz_import(a, size, 1, 1, 1, 0, x);  // Convert x to mpz_t a
+  mpz_import(b, size, 1, 1, 1, 0, y);  // Convert y to mpz_t b
 
-  /* Create a stream that will write to our buffer. */
-  pb_ostream_t stream = pb_ostream_from_buffer(buffer, max_buffer_len);
+  // Get shift point
+  stark_point HASH_SHIFT_POINT, P_1, P_2, P_3, P_4;
+  stark_point_copy(&HASH_SHIFT_POINT, &starkPts->P[0]);
+  stark_point_copy(&P_1, &starkPts->P[1]);
+  stark_point_copy(&P_2, &starkPts->P[2]);
+  stark_point_copy(&P_3, &starkPts->P[3]);
+  stark_point_copy(&P_4, &starkPts->P[4]);
 
-  /* Now we are ready to encode the message! */
-  bool status = pb_encode(&stream, NEAR_RESULT_FIELDS, result);
+  // Compute the hash using the Starkware Pedersen hash definition
+  stark_point x_part, y_part, hash_point;
+  // process_single_element(x, &P_1, &P_2, &x_part);
+  // process_single_element(y, &P_3, &P_4, &y_part);
 
-  if (true == status) {
-    *bytes_written_out = stream.bytes_written;
-  }
+  process_single_element(a, &P_1, &P_2, &x_part);
+  process_single_element(b, &P_3, &P_4, &y_part);
 
-  return status;
-}
+  stark_point_add(starkCurve, &HASH_SHIFT_POINT, &x_part);
+  stark_point_add(starkCurve, &x_part, &y_part);
+  stark_point_copy(&y_part, &hash_point);
 
-bool check_near_query(const near_query_t *query, pb_size_t exp_query_tag) {
-  if ((NULL == query) || (exp_query_tag != query->which_request)) {
-    near_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
-                    ERROR_DATA_FLOW_INVALID_QUERY);
-    return false;
-  }
-  return true;
-}
-
-near_result_t init_near_result(pb_size_t result_tag) {
-  near_result_t result = NEAR_RESULT_INIT_ZERO;
-  result.which_response = result_tag;
-  return result;
-}
-
-void near_send_error(pb_size_t which_error, uint32_t error_code) {
-  near_result_t result = init_near_result(NEAR_RESULT_COMMON_ERROR_TAG);
-  result.common_error = init_common_error(which_error, error_code);
-  near_send_result(&result);
-}
-
-void near_send_result(const near_result_t *result) {
-  // TODO: Eventually 1700 will be replaced by NEAR_RESULT_SIZE when all
-  // option files for bitcoin app are complete
-  uint8_t buffer[1700] = {0};
-  size_t bytes_encoded = 0;
-  ASSERT(encode_near_result(result, buffer, sizeof(buffer), &bytes_encoded));
-  send_response_to_host(&buffer[0], bytes_encoded);
-}
-
-bool near_get_query(near_query_t *query, pb_size_t exp_query_tag) {
-  evt_status_t event = get_events(EVENT_CONFIG_USB, MAX_INACTIVITY_TIMEOUT);
-
-  if (true == event.p0_event.flag) {
-    return false;
-  }
-
-  if (!decode_near_query(
-          event.usb_event.p_msg, event.usb_event.msg_size, query)) {
-    return false;
-  }
-
-  if (!check_near_query(query, exp_query_tag)) {
-    return false;
-  }
+  memzero(hash, 32);
+  // memzero(hex, 100);
+  // bignum_to_string(&hash_point.x, hex, size * 2 + 1);
+  // hex_string_to_byte_array(hex, size * 2 + 1, hash);
+  mpz_to_byte_array(hash_point.x, hash, 32);
 
   return true;
+}
+
+void process_single_element(mpz_t element,
+                            stark_point *p1,
+                            stark_point *p2,
+                            stark_point *result) {
+  ASSERT(mpz_cmp(element, starkCurve->prime) < 0);
+
+  mpz_t low_part, high_nibble;
+  mpz_init(low_part);
+  mpz_init(high_nibble);
+
+  // Extract the low 248 bits and high bits from the element
+  // bignum_and(&low_part, element, element);
+  // bignum_rshift(&high_nibble, element, LOW_PART_BITS);
+
+  // Extract the low 248 bits and high bits from the element
+  mpz_and(element, element, low_part);
+  mpz_fdiv_q_2exp(element, high_nibble,  LOW_PART_BITS);
+
+  stark_point res1, res2;
+  stark_point_multiply(starkCurve, low_part, p1, &res1);          // low_part * p1
+  stark_point_multiply(starkCurve, high_nibble, p2, &res2);             // high_nibble * p2
+  stark_point_add(starkCurve, &res1, &res2);    // Combine results
+
+  stark_point_copy(&res2, result);
 }

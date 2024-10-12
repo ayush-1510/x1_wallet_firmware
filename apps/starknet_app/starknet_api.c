@@ -1,7 +1,7 @@
 /**
- * @file    near_helpers.c
+ * @file    starknet_api.c
  * @author  Cypherock X1 Team
- * @brief   Helper functions for the NEAR app
+ * @brief   Defines helpers apis for Starknet app.
  * @copyright Copyright (c) 2023 HODL TECH PTE LTD
  * <br/> You may obtain a copy of license at <a href="https://mitcc.org/"
  *target=_blank>https://mitcc.org/</a>
@@ -60,11 +60,14 @@
  * INCLUDES
  *****************************************************************************/
 
-#include "near_helpers.h"
+#include "starknet_api.h"
 
-#include "constant_texts.h"
-#include "near_context.h"
-#include "utils.h"
+#include <pb_decode.h>
+#include <pb_encode.h>
+
+#include "common_error.h"
+#include "core_api.h"
+#include "events.h"
 
 /*****************************************************************************
  * EXTERN VARIABLES
@@ -97,57 +100,100 @@
 /*****************************************************************************
  * GLOBAL FUNCTIONS
  *****************************************************************************/
-
-bool near_derivation_path_guard(const uint32_t *path, uint8_t levels) {
-  bool status = false;
-  if (NEAR_IMPLICIT_ACCOUNT_DEPTH != levels) {
-    return status;
+bool decode_starknet_query(const uint8_t *data,
+                           uint16_t data_size,
+                           starknet_query_t *query_out) {
+  if (NULL == data || NULL == query_out || 0 == data_size) {
+    starknet_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
+                        ERROR_DATA_FLOW_DECODING_FAILED);
+    return false;
   }
 
-  uint32_t purpose = path[0], coin = path[1], account = path[2],
-           change = path[3], address = path[4];
+  // zeroise for safety from garbage in the query reference
+  memzero(query_out, sizeof(starknet_query_t));
 
-  // m/44'/397'/0'/0'/i'
-  status = (NEAR_PURPOSE_INDEX == purpose && NEAR_COIN_INDEX == coin &&
-            NEAR_ACCOUNT_INDEX == account && NEAR_CHANGE_INDEX == change &&
-            is_hardened(address));
+  /* Create a stream that reads from the buffer. */
+  pb_istream_t stream = pb_istream_from_buffer(data, data_size);
+
+  /* Now we are ready to decode the message. */
+  bool status = pb_decode(&stream, STARKNET_QUERY_FIELDS, query_out);
+
+  /* Send error to host if status is false*/
+  if (false == status) {
+    starknet_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
+                        ERROR_DATA_FLOW_DECODING_FAILED);
+  }
 
   return status;
 }
 
-void near_get_new_account_id_from_fn_args(const char *args,
-                                          uint32_t args_len,
-                                          char *account_id) {
-  // length of '{"new_account_id":"'
-  const int start = 19;
+bool encode_starknet_result(const starknet_result_t *result,
+                            uint8_t *buffer,
+                            uint16_t max_buffer_len,
+                            size_t *bytes_written_out) {
+  if (NULL == result || NULL == buffer || NULL == bytes_written_out)
+    return false;
 
-  // length of '","new_public_key":"ed25519:..."}'
-  const int end = args_len - 74;
+  /* Create a stream that will write to our buffer. */
+  pb_ostream_t stream = pb_ostream_from_buffer(buffer, max_buffer_len);
 
-  memcpy(account_id, args + start, end - start);
-  account_id[end - start] = '\0';
+  /* Now we are ready to encode the message! */
+  bool status = pb_encode(&stream, STARKNET_RESULT_FIELDS, result);
 
-  return;
+  if (true == status) {
+    *bytes_written_out = stream.bytes_written;
+  }
+
+  return status;
 }
 
-void get_amount_string(const uint8_t *amount,
-                       char *string,
-                       size_t size_of_string) {
-  char amount_string[40] = "";
-  char amount_decimal_string[40] = "";
-  byte_array_to_hex_string(
-      amount, NEAR_DEPOSIT_SIZE_BYTES, amount_string, sizeof(amount_string));
+bool check_starknet_query(const starknet_query_t *query,
+                          pb_size_t exp_query_tag) {
+  if ((NULL == query) || (exp_query_tag != query->which_request)) {
+    starknet_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
+                        ERROR_DATA_FLOW_INVALID_QUERY);
+    return false;
+  }
+  return true;
+}
 
-  convert_byte_array_to_decimal_string(NEAR_DEPOSIT_SIZE_BYTES * 2,
-                                       NEAR_DECIMAL,
-                                       amount_string,
-                                       amount_decimal_string,
-                                       sizeof(amount_decimal_string));
+starknet_result_t init_starknet_result(pb_size_t result_tag) {
+  starknet_result_t result = STARKNET_RESULT_INIT_ZERO;
+  result.which_response = result_tag;
+  return result;
+}
 
-  snprintf(string,
-           size_of_string,
-           UI_TEXT_VERIFY_AMOUNT,
-           amount_decimal_string,
-           near_app.lunit_name);
-  return;
+void starknet_send_error(pb_size_t which_error, uint32_t error_code) {
+  starknet_result_t result =
+      init_starknet_result(STARKNET_RESULT_COMMON_ERROR_TAG);
+  result.common_error = init_common_error(which_error, error_code);
+  starknet_send_result(&result);
+}
+
+void starknet_send_result(const starknet_result_t *result) {
+  // TODO: Set the options file for all
+  uint8_t buffer[1700] = {0};
+  size_t bytes_encoded = 0;
+  ASSERT(
+      encode_starknet_result(result, buffer, sizeof(buffer), &bytes_encoded));
+  send_response_to_host(&buffer[0], bytes_encoded);
+}
+
+bool starknet_get_query(starknet_query_t *query, pb_size_t exp_query_tag) {
+  evt_status_t event = get_events(EVENT_CONFIG_USB, MAX_INACTIVITY_TIMEOUT);
+
+  if (true == event.p0_event.flag) {
+    return false;
+  }
+
+  if (!decode_starknet_query(
+          event.usb_event.p_msg, event.usb_event.msg_size, query)) {
+    return false;
+  }
+
+  if (!check_starknet_query(query, exp_query_tag)) {
+    return false;
+  }
+
+  return true;
 }

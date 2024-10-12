@@ -1,7 +1,7 @@
 /**
- * @file    near_txn_helpers.c
+ * @file    starknet_context.c
  * @author  Cypherock X1 Team
- * @brief   Helper functions for the NEAR app for txn signing flow
+ * @brief   Constant variables and configurations for the Starknet app
  * @copyright Copyright (c) 2023 HODL TECH PTE LTD
  * <br/> You may obtain a copy of license at <a href="https://mitcc.org/"
  *target=_blank>https://mitcc.org/</a>
@@ -60,12 +60,10 @@
  * INCLUDES
  *****************************************************************************/
 
-#include "near_txn_helpers.h"
+#include "starknet_context.h"
 
 #include "coin_utils.h"
-#include "constant_texts.h"
-#include "near_context.h"
-#include "utils.h"
+#include "starknet_helpers.h"
 
 /*****************************************************************************
  * EXTERN VARIABLES
@@ -86,6 +84,11 @@
 /*****************************************************************************
  * GLOBAL VARIABLES
  *****************************************************************************/
+const starknet_config_t starknet_app = {
+    .lunit1_name = "STRK",
+    .lunit2_name = "STRK",
+    .name = "Starknet",
+};
 
 /*****************************************************************************
  * STATIC FUNCTION PROTOTYPES
@@ -98,94 +101,3 @@
 /*****************************************************************************
  * GLOBAL FUNCTIONS
  *****************************************************************************/
-bool near_parse_transaction(const uint8_t *byte_array,
-                            uint16_t byte_array_size,
-                            near_unsigned_txn *utxn) {
-  if (byte_array == NULL || utxn == NULL)
-    return;
-  memzero(utxn, sizeof(near_unsigned_txn));
-
-  uint16_t offset = 0;
-
-  utxn->signer_id_length = U32_READ_LE_ARRAY(byte_array);
-  offset += 4;
-  utxn->signer = (byte_array + offset);
-  offset += utxn->signer_id_length;
-  utxn->signer_key.key_type = byte_array[offset++];
-  utxn->signer_key.key = (byte_array + offset);
-  offset += 32;
-  memcpy(utxn->nonce, byte_array + offset, sizeof(utxn->nonce));
-  offset += 8;
-  utxn->receiver_id_length = U32_READ_LE_ARRAY(byte_array + offset);
-  offset += 4;
-  utxn->receiver = (byte_array + offset);
-  offset += utxn->receiver_id_length;
-  utxn->blockhash = (byte_array + offset);
-  offset += 32;
-  utxn->action_count = U32_READ_LE_ARRAY(byte_array + offset);
-  offset += 4;
-  utxn->actions_type = byte_array[offset++];
-
-  // Currently, our decoder only supports 1 action
-  if (1 < utxn->action_count) {
-    return false;
-  }
-
-  switch (utxn->actions_type) {
-    case NEAR_ACTION_TRANSFER: {
-      memcpy(utxn->action.transfer.amount,
-             byte_array + offset,
-             sizeof(utxn->action.transfer.amount));
-      cy_reverse_byte_array(utxn->action.transfer.amount,
-                            sizeof(utxn->action.transfer.amount));
-      break;
-    }
-
-    case NEAR_ACTION_FUNCTION_CALL: {
-      utxn->action.fn_call.method_name_length =
-          U32_READ_LE_ARRAY(byte_array + offset);
-      offset += 4;
-      utxn->action.fn_call.method_name = (char *)(byte_array + offset);
-      offset += utxn->action.fn_call.method_name_length;
-
-      // As of now, we only support signing of create_account method
-      if (0 != strncmp(utxn->action.fn_call.method_name,
-                       ui_text_near_create_account_method,
-                       utxn->action.fn_call.method_name_length)) {
-        return false;
-      }
-
-      utxn->action.fn_call.args_length = U32_READ_LE_ARRAY(byte_array + offset);
-      offset += 4;
-      utxn->action.fn_call.args = (byte_array + offset);
-      offset += utxn->action.fn_call.args_length;
-      memcpy(utxn->action.fn_call.gas,
-             byte_array + offset,
-             sizeof(utxn->action.fn_call.gas));
-      cy_reverse_byte_array(utxn->action.fn_call.gas,
-                            sizeof(utxn->action.fn_call.gas));
-      offset += 8;
-      memcpy(utxn->action.fn_call.deposit,
-             byte_array + offset,
-             sizeof(utxn->action.fn_call.deposit));
-      cy_reverse_byte_array(utxn->action.fn_call.deposit,
-                            sizeof(utxn->action.fn_call.deposit));
-      break;
-    }
-
-    default: {
-      return false;
-      break;
-    }
-  }
-
-  // Reverse byte order
-  cy_reverse_byte_array(utxn->nonce, sizeof(utxn->nonce));
-
-  // TODO: Offset validation should occur at every read
-  if (offset <= byte_array_size) {
-    return true;
-  }
-
-  return false;
-}

@@ -1,16 +1,15 @@
 /**
- * @file    near.c
+ * @file    starknet_helper_tests.c
  * @author  Cypherock X1 Team
- * @brief   Near coin support.
- *          Stores near coin related class.
- * @copyright Copyright (c) 2022 HODL TECH PTE LTD
+ * @brief   Unit tests for EVM txn helper functions
+ * @copyright Copyright (c) 2023 HODL TECH PTE LTD
  * <br/> You may obtain a copy of license at <a href="https://mitcc.org/"
  *target=_blank>https://mitcc.org/</a>
  *
  ******************************************************************************
  * @attention
  *
- * (c) Copyright 2022 by HODL TECH PTE LTD
+ * (c) Copyright 2023 by HODL TECH PTE LTD
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -56,62 +55,67 @@
  *
  ******************************************************************************
  */
-#include "near.h"
 
-#include "near_context.h"
+#include "curves.h"
+#include "flash_config.h"
+#include "pb_decode.h"
+#include "pb_encode.h"
+#include "starknet_api.h"
+#include "starknet_context.h"
+#include "starknet_crypto.h"
+#include "starknet_helpers.h"
+#include "starknet_main.h"
+#include "starknet_priv.h"
+#include "unity_fixture.h"
+#include "usb_api_priv.h"
+#include "utils.h"
 
-void near_serialize_account_ids(const char **account_ids,
-                                const size_t count,
-                                uint8_t *data,
-                                uint16_t *data_len) {
-  *data_len = 0;
-  data[(*data_len)++] = TAG_NEAR_DEFAULT_NETWORK;
-  *data_len += 2;    // Leave 2 bytes for storing data length
-  for (size_t i = 0; i < count; i++) {
-    fill_flash_tlv(data,
-                   data_len,
-                   TAG_NEAR_REGISTERED_ACC,
-                   strnlen(account_ids[i], NEAR_ACC_ID_MAX_LEN) + 1,
-                   (const uint8_t *)account_ids[i]);
-  }
-  data[1] = (*data_len - 3);
-  data[2] = (*data_len - 3) >> 8;
+TEST_GROUP(starknet_helper_test);
+
+/**
+ * @brief Test setup for usb event consumer tests.
+ * @details The function populates data in local buffer of USB communication
+ * module so that the event getter has an event ready for dispatch for
+ * performing tests. buffer of packet(s) of data.
+ */
+TEST_SETUP(starknet_helper_test) {
+  starknet_init();
 }
 
-void near_deserialize_account_ids(const uint8_t *data,
-                                  const uint16_t data_len,
-                                  char **account_ids,
-                                  size_t count) {
-  uint16_t offset = 3;
-
-  for (size_t i = 0; i < count; i++) {
-    if (data[offset++] != TAG_NEAR_REGISTERED_ACC)
-      return;
-
-    uint16_t acc_id_len = U16_READ_LE_ARRAY(data + offset);
-    offset += 2;
-
-    account_ids[i] = (char *)(data + offset);
-    offset += acc_id_len;
-
-    if (offset > data_len)
-      return;
-  }
+/**
+ * @brief Tear down the old test data
+ * @details The function will perform cleanup of the current running test and
+ * bring the state of execution to a fresh start. This is done by using purge
+ * api of usb-event and clearing buffers using usb-comm APIs.
+ */
+TEST_TEAR_DOWN(starknet_helper_test) {
+  return;
 }
 
-size_t near_get_account_ids_count(const uint8_t *data,
-                                  const uint16_t data_len) {
-  uint16_t offset = 3;
-  size_t count = 0;
-  while (offset < data_len) {
-    if (data[offset++] != TAG_NEAR_REGISTERED_ACC)
-      return count;
+TEST(starknet_helper_test, starknet_pedersen_hash) {
+  // Ref1:
+  // https://github.com/starkware-libs/starkex-for-spot-trading/blob/607f0b4ce507e1d95cd018d206a2797f6ba4aab4/src/starkware/crypto/starkware/crypto/signature/test/config/signature_test_data.json
+  // Ref2:
+  // https://github.com/xJonathanLEI/starknet-rs/blob/f31e426a65225b9830bbf3c148f7ea05bf9dc257/starknet-crypto/src/pedersen_hash.rs
 
-    uint16_t acc_id_len = 0;
-    memcpy(&acc_id_len, data + offset, sizeof(acc_id_len));
-    offset += 2;
-    offset += acc_id_len;
-    count++;
-  }
-  return count;
+  uint8_t x[32], y[32], hash[32];
+
+  hex_string_to_byte_array(
+      "03d937c035c878245caf64531a5756109c53068da139362728feb561405371cb",
+      64,
+      x);
+  hex_string_to_byte_array(
+      "0208a0a10250e382e1e4bbe2880906c2791bf6275695e02fbbc6aeff9cd8b31a",
+      64,
+      y);
+
+  const uint8_t expected_hash[32];
+  hex_string_to_byte_array(
+      "030e480bed5fe53fa909cc0f8c4d99b8f9f2c016be4c41e13a4848797979c662",
+      64,
+      expected_hash);
+
+  TEST_ASSERT_TRUE(pederson_hash(x, y, 32, hash));
+
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(expected_hash, hash, 32);
 }

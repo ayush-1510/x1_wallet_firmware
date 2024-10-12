@@ -1,7 +1,8 @@
 /**
- * @file    near_txn.c
+ * @file    starknet_txn.c
  * @author  Cypherock X1 Team
- * @brief   Source file to handle transaction signing logic for NEAR protocol
+ * @brief   Source file to handle transaction signing logic for Starknet
+ *protocol
  *
  * @copyright Copyright (c) 2023 HODL TECH PTE LTD
  * <br/> You may obtain a copy of license at <a href="https://mitcc.org/"
@@ -61,13 +62,11 @@
  * INCLUDES
  *****************************************************************************/
 
-#include "near_api.h"
-#include "near_context.h"
-#include "near_helpers.h"
-#include "near_priv.h"
-#include "near_txn_helpers.h"
-#include "near_txn_user_verification.h"
 #include "reconstruct_wallet_flow.h"
+#include "starknet_api.h"
+#include "starknet_context.h"
+#include "starknet_helpers.h"
+#include "starknet_priv.h"
 #include "status_api.h"
 #include "ui_core_confirm.h"
 #include "ui_screens.h"
@@ -94,7 +93,7 @@
  * @details The function performs the check on the request type and if the check
  * fails, then it will send an error to the host bitcoin app and return false.
  *
- * @param query Reference to an instance of near_query_t containing query
+ * @param query Reference to an instance of starknet_query_t containing query
  * received from host app
  * @param which_request The expected request type enum
  *
@@ -102,7 +101,7 @@
  * @retval true If the query contains the expected request
  * @retval false If the query does not contain the expected request
  */
-static bool check_which_request(const near_query_t *query,
+static bool check_which_request(const starknet_query_t *query,
                                 pb_size_t which_request);
 
 /**
@@ -118,22 +117,22 @@ static void send_response(const pb_size_t which_response);
  * request. If invalid path is detected, the function will send an error to the
  * host and return false.
  *
- * @param request Reference to an instance of near_sign_txn_request_t
+ * @param request Reference to an instance of starknet_sign_txn_request_t
  * @return bool Indicating if the verification passed or failed
  * @retval true If all the derivation path entries are valid
  * @retval false If any of the derivation path entries are invalid
  */
-static bool validate_request_data(const near_sign_txn_request_t *request);
+static bool validate_request_data(const starknet_sign_txn_request_t *request);
 
 /**
  * @brief Takes already received and decoded query for the user confirmation.
  * @details The function will verify if the query contains the
- * NEAR_SIGN_TXN_REQUEST_INITIATE_TAG type of request. Additionally, the
+ * STARKNET_SIGN_TXN_REQUEST_INITIATE_TAG type of request. Additionally, the
  * wallet-id is validated for sanity and the derivation path for the account is
  * also validated. After the validations, user is prompted about the action for
  * confirmation. The function returns true indicating all the validation and
  * user confirmation was a success. The function also duplicates the data from
- * query into the near_txn_context  for further processing.
+ * query into the starknet_txn_context  for further processing.
  *
  * @param query Constant reference to the decoded query received from the host
  *
@@ -141,18 +140,18 @@ static bool validate_request_data(const near_sign_txn_request_t *request);
  * @retval true If all the validation and user confirmation was positive
  * @retval false If any of the validation or user confirmation was negative
  */
-static bool handle_initiate_query(const near_query_t *query);
+static bool handle_initiate_query(const starknet_query_t *query);
 
 /**
  * @brief Receives unsigned txn from the host. If reception is successful, it
  * also parses the txn to ensure it's validity.
  * @note In case of any failure, a corresponding message is conveyed to the host
  *
- * @param query Reference to buffer of type near_query_t
+ * @param query Reference to buffer of type starknet_query_t
  * @return true If the txn is received in the internal buffers and is valid
  * @return false If the txn could not be received or it's validation failed
  */
-static bool fetch_valid_input(near_query_t *query);
+static bool fetch_valid_input(starknet_query_t *query);
 
 /**
  * @brief This function executes user verification flow of the unsigned txn
@@ -181,22 +180,22 @@ static bool get_user_verification(void);
 static bool sign_txn(uint8_t *signature_buffer);
 
 /**
- * @brief Sends signature of the NEAR unsigned txn to the host
+ * @brief Sends signature of the STARKNET unsigned txn to the host
  * @details The function waits for the host to send a request of type
- * NEAR_SIGN_TXN_REQUEST_SIGNATURE_TAG and sends the response
+ * STARKNET_SIGN_TXN_REQUEST_SIGNATURE_TAG and sends the response
  *
- * @param query Reference to buffer of type near_query_t
+ * @param query Reference to buffer of type starknet_query_t
  * @param signature Reference to signature to be sent to the host
  * @return true If the signature was sent successfully
  * @return false If the signature could not be sent - maybe due to and P0 event
  * or invalid request received from the host
  */
-static bool send_signature(near_query_t *query, const uint8_t *signature);
+static bool send_signature(starknet_query_t *query, const uint8_t *signature);
 
 /*****************************************************************************
  * STATIC VARIABLES
  *****************************************************************************/
-static near_txn_context_t *near_txn_context = NULL;
+static starknet_txn_context_t *starknet_txn_context = NULL;
 
 /*****************************************************************************
  * GLOBAL VARIABLES
@@ -205,11 +204,11 @@ static near_txn_context_t *near_txn_context = NULL;
 /*****************************************************************************
  * STATIC FUNCTIONS
  *****************************************************************************/
-static bool check_which_request(const near_query_t *query,
+static bool check_which_request(const starknet_query_t *query,
                                 pb_size_t which_request) {
   if (which_request != query->sign_txn.which_request) {
-    near_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
-                    ERROR_DATA_FLOW_INVALID_REQUEST);
+    starknet_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
+                        ERROR_DATA_FLOW_INVALID_REQUEST);
     return false;
   }
 
@@ -217,75 +216,74 @@ static bool check_which_request(const near_query_t *query,
 }
 
 static void send_response(const pb_size_t which_response) {
-  near_result_t result = init_near_result(NEAR_RESULT_SIGN_TXN_TAG);
+  starknet_result_t result = init_starknet_result(STARKNET_RESULT_SIGN_TXN_TAG);
   result.sign_txn.which_response = which_response;
-  near_send_result(&result);
+  starknet_send_result(&result);
 }
 
-static bool validate_request_data(const near_sign_txn_request_t *request) {
+static bool validate_request_data(const starknet_sign_txn_request_t *request) {
   bool status = true;
 
-  if (!near_derivation_path_guard(request->initiate.derivation_path,
-                                  request->initiate.derivation_path_count)) {
-    near_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
-                    ERROR_DATA_FLOW_INVALID_DATA);
+  if (!starknet_derivation_path_guard(
+          request->initiate.derivation_path,
+          request->initiate.derivation_path_count)) {
+    starknet_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
+                        ERROR_DATA_FLOW_INVALID_DATA);
     status = false;
   }
   return status;
 }
 
-static bool handle_initiate_query(const near_query_t *query) {
+static bool handle_initiate_query(const starknet_query_t *query) {
   char wallet_name[NAME_SIZE] = "";
   char msg[100] = "";
 
-  // TODO: Handle wallet search failures - eg: Wallet ID not found, Wallet
-  // ID found but is invalid/locked wallet
-  if (!check_which_request(query, NEAR_SIGN_TXN_REQUEST_INITIATE_TAG) ||
+  if (!check_which_request(query, STARKNET_SIGN_TXN_REQUEST_INITIATE_TAG) ||
       !validate_request_data(&query->sign_txn) ||
       !get_wallet_name_by_id(query->sign_txn.initiate.wallet_id,
                              (uint8_t *)wallet_name,
-                             near_send_error)) {
+                             starknet_send_error)) {
     return false;
   }
 
-  snprintf(
-      msg, sizeof(msg), UI_TEXT_SIGN_TXN_PROMPT, near_app.name, wallet_name);
+  snprintf(msg,
+           sizeof(msg),
+           UI_TEXT_SIGN_TXN_PROMPT,
+           starknet_app.name,
+           wallet_name);
   // Take user consent to sign transaction for the wallet
-  if (!core_confirmation(msg, near_send_error)) {
+  if (!core_confirmation(msg, starknet_send_error)) {
     return false;
   }
 
-  set_app_flow_status(NEAR_SIGN_TXN_STATUS_CONFIRM);
-  memcpy(&near_txn_context->init_info,
+  set_app_flow_status(STARKNET_SIGN_TXN_STATUS_CONFIRM);
+  memcpy(&starknet_txn_context->init_info,
          &query->sign_txn.initiate,
-         sizeof(near_sign_txn_initiate_request_t));
+         sizeof(starknet_sign_txn_initiate_request_t));
 
-  send_response(NEAR_SIGN_TXN_RESPONSE_CONFIRMATION_TAG);
+  send_response(STARKNET_SIGN_TXN_RESPONSE_CONFIRMATION_TAG);
   // show processing screen for a minimum duration (additional time will add due
   // to actual processing)
   delay_scr_init(ui_text_processing, DELAY_SHORT);
   return true;
 }
 
-static bool fetch_valid_input(near_query_t *query) {
-  if (!near_get_query(query, NEAR_QUERY_SIGN_TXN_TAG) ||
-      !check_which_request(query, NEAR_SIGN_TXN_REQUEST_TXN_TAG)) {
+static bool fetch_valid_input(starknet_query_t *query) {
+  if (!starknet_get_query(query, STARKNET_QUERY_SIGN_TXN_TAG) &&
+      !check_which_request(query, STARKNET_SIGN_TXN_REQUEST_TXN_TAG)) {
     return false;
   }
 
-  memcpy(&near_txn_context->unsigned_txn,
-         &query->sign_txn.txn,
-         sizeof(near_sign_txn_unsigned_txn_t));
+  memcpy(starknet_txn_context->transaction,
+         query->sign_txn.txn.txn.bytes,
+         query->sign_txn.txn.txn.size);
 
-  if (near_parse_transaction(
-          (const uint8_t *)near_txn_context->unsigned_txn.txn.bytes,
-          near_txn_context->unsigned_txn.txn.size,
-          &near_txn_context->decoded_txn)) {
-    send_response(NEAR_SIGN_TXN_RESPONSE_UNSIGNED_TXN_ACCEPTED_TAG);
+  if (1) {
+    send_response(STARKNET_SIGN_TXN_RESPONSE_UNSIGNED_TXN_ACCEPTED_TAG);
     return true;
   } else {
-    near_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
-                    ERROR_DATA_FLOW_INVALID_DATA);
+    starknet_send_error(ERROR_COMMON_ERROR_CORRUPT_DATA_TAG,
+                        ERROR_DATA_FLOW_INVALID_DATA);
     return false;
   }
 
@@ -293,27 +291,17 @@ static bool fetch_valid_input(near_query_t *query) {
 }
 
 static bool get_user_verification(void) {
-  const near_unsigned_txn *decoded_utxn = &near_txn_context->decoded_txn;
   bool user_verified = false;
+  char msg[128] = "0x";
 
-  switch (decoded_utxn->actions_type) {
-    case NEAR_ACTION_TRANSFER: {
-      user_verified = user_verification_transfer(decoded_utxn);
-      break;
-    }
-    case NEAR_ACTION_FUNCTION_CALL: {
-      user_verified = user_verification_function(decoded_utxn);
-      break;
-    }
-    default: {
-      // Parsing will fail if an unsupported action type is identified from
-      // the unsigned transaction. So no need to do anything
-      break;
-    }
-  }
+  byte_array_to_hex_string(starknet_txn_context->transaction, 32, &msg[2], 126);
+  // TODO: Add blind signing warning
+  user_verified =
+      core_confirmation(UI_TEXT_BLIND_SIGNING_WARNING, starknet_send_error);
+  user_verified &= core_scroll_page(NULL, msg, starknet_send_error);
 
   if (user_verified) {
-    set_app_flow_status(NEAR_SIGN_TXN_STATUS_VERIFY);
+    set_app_flow_status(STARKNET_SIGN_TXN_STATUS_VERIFY);
   }
 
   return user_verified;
@@ -321,54 +309,47 @@ static bool get_user_verification(void) {
 
 static bool sign_txn(uint8_t *signature_buffer) {
   uint8_t seed[64] = {0};
-  if (!reconstruct_seed(
-          near_txn_context->init_info.wallet_id, seed, near_send_error)) {
+  if (!reconstruct_seed(starknet_txn_context->init_info.wallet_id,
+                        seed,
+                        starknet_send_error)) {
     memzero(seed, sizeof(seed));
-    // TODO: handle errors of reconstruction flow
     return false;
   }
 
-  set_app_flow_status(NEAR_SIGN_TXN_STATUS_SEED_GENERATED);
+  set_app_flow_status(STARKNET_SIGN_TXN_STATUS_SEED_GENERATED);
 
-  uint8_t digest[SHA256_DIGEST_LENGTH] = {0};
-  sha256_Raw(near_txn_context->unsigned_txn.txn.bytes,
-             near_txn_context->unsigned_txn.txn.size,
-             digest);
+  uint8_t stark_key[32] = {0};
+  if (starknet_derive_bip32_node(seed, stark_key) &&
+      starknet_derive_key_from_seed(
+          stark_key,
+          starknet_txn_context->init_info.derivation_path,
+          starknet_txn_context->init_info.derivation_path_count,
+          stark_key)) {
+    // TODO: Generate signature using stark_key
+    memcpy(signature_buffer, stark_key, sizeof(stark_key));
+  } else {
+    starknet_send_error(ERROR_COMMON_ERROR_UNKNOWN_ERROR_TAG, 1);
+  }
 
-  HDNode t_node = {0};
-  derive_hdnode_from_path(near_txn_context->init_info.derivation_path,
-                          near_txn_context->init_info.derivation_path_count,
-                          ED25519_NAME,
-                          seed,
-                          &t_node);
-
-  ed25519_public_key public_key = {0};
-  ed25519_publickey(t_node.private_key, public_key);
-
-  ed25519_sign(
-      digest, sizeof(digest), t_node.private_key, public_key, signature_buffer);
-
-  memzero(digest, sizeof(digest));
   memzero(seed, sizeof(seed));
-  memzero(&t_node, sizeof(t_node));
-  memzero(public_key, sizeof(public_key));
+  memzero(stark_key, sizeof(stark_key));
 
   return true;
 }
 
-static bool send_signature(near_query_t *query, const uint8_t *signature) {
-  near_result_t result = init_near_result(NEAR_RESULT_SIGN_TXN_TAG);
-  result.sign_txn.which_response = NEAR_SIGN_TXN_RESPONSE_SIGNATURE_TAG;
+static bool send_signature(starknet_query_t *query, const uint8_t *signature) {
+  starknet_result_t result = init_starknet_result(STARKNET_RESULT_SIGN_TXN_TAG);
+  result.sign_txn.which_response = STARKNET_SIGN_TXN_RESPONSE_SIGNATURE_TAG;
 
-  if (!near_get_query(query, NEAR_QUERY_SIGN_TXN_TAG) ||
-      !check_which_request(query, NEAR_SIGN_TXN_REQUEST_SIGNATURE_TAG)) {
+  if (!starknet_get_query(query, STARKNET_QUERY_SIGN_TXN_TAG) ||
+      !check_which_request(query, STARKNET_SIGN_TXN_REQUEST_SIGNATURE_TAG)) {
     return false;
   }
 
   memcpy(&result.sign_txn.signature.signature[0],
          signature,
          sizeof(result.sign_txn.signature.signature));
-  near_send_result(&result);
+  starknet_send_result(&result);
   return true;
 }
 
@@ -376,9 +357,10 @@ static bool send_signature(near_query_t *query, const uint8_t *signature) {
  * GLOBAL FUNCTIONS
  *****************************************************************************/
 
-void near_sign_transaction(near_query_t *query) {
-  near_txn_context = (near_txn_context_t *)malloc(sizeof(near_txn_context_t));
-  memzero(near_txn_context, sizeof(near_txn_context_t));
+void starknet_sign_transaction(starknet_query_t *query) {
+  starknet_txn_context =
+      (starknet_txn_context_t *)malloc(sizeof(starknet_txn_context_t));
+  memzero(starknet_txn_context, sizeof(starknet_txn_context_t));
 
   uint8_t signature[64] = {0};
   memzero(signature, sizeof(signature));
@@ -391,9 +373,9 @@ void near_sign_transaction(near_query_t *query) {
 
   memzero(signature, sizeof(signature));
 
-  if (near_txn_context) {
-    free(near_txn_context);
-    near_txn_context = NULL;
+  if (starknet_txn_context) {
+    free(starknet_txn_context);
+    starknet_txn_context = NULL;
   }
 
   return;
